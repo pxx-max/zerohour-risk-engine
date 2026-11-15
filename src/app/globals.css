@@ -1,0 +1,88 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+  --rl-canvas: #0B0E1A;
+  --rl-surface: #13182B;
+  --rl-surface-elevated: #192038;
+  --rl-border: rgba(139, 92, 246, 0.14);
+  --rl-indigo: #6366F1;
+  --rl-violet: #8B5CF6;
+  --rl-cyan: #38BDF8;
+  --rl-emerald: #34D399;
+  --rl-amber: #FBBF24;
+  --rl-rose: #FB7185;
+}
+
+body {
+  background-color: #0B0E1A;
+  color: #F1F5F9;
+  font-feature-settings: "tnum" on, "lnum" on;
+  overflow-x: hidden;
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+.rl-card {
+  background-color: #13182B;
+  border: 1px solid rgba(139, 92, 246, 0.14);
+  border-radius: 1rem;
+}
+
+.rl-card-glow {
+  background: radial-gradient(
+      130% 130% at 0% 0%,
+      rgba(139, 92, 246, 0.16) 0%,
+      rgba(99, 102, 241, 0.06) 45%,
+      rgba(19, 24, 43, 0.96) 100%
+    ),
+    #13182B;
+  border: 1px solid rgba(139, 92, 246, 0.22);
+  border-radius: 1rem;
+}
+
+.rl-banner-wave {
+  background: linear-gradient(
+      115deg,
+      rgba(124, 58, 237, 0.22) 0%,
+      rgba(99, 102, 241, 0.12) 45%,
+      rgba(19, 24, 43, 0.95) 100%
+    ),
+    #13182B;
+  border: 1px solid rgba(139, 92, 246, 0.24);
+  border-radius: 1rem;
+}
+
+/* Subtle custom dark-indigo scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #0B0E1A;
+}
+::-webkit-scrollbar-thumb {
+  background: #232A45;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #353F66;
+}
+
+@keyframes subtleWave {
+  0%,
+  100% {
+    transform: translateY(0px) scale(1);
+  }
+  50% {
+    transform: translateY(-8px) scale(1.015);
+  }
+}
+
+.animate-wave-slow {
+  animation: subtleWave 9s ease-in-out infinite;
+}
