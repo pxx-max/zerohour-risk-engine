@@ -11,16 +11,204 @@ interface ChatAction {
 interface GuideReply {
   reply: string;
   title?: string;
+  actionLabel?: string;
+  actionRoute?: string;
   actions: ChatAction[];
 }
 
-function buildExpertGuideResponse(
+const TICKER_ALIASES: Record<string, { symbol: string; name: string; inTerminal: boolean }> = {
+  apple: { symbol: "AAPL", name: "Apple Inc.", inTerminal: true },
+  aapl: { symbol: "AAPL", name: "Apple Inc.", inTerminal: true },
+  nvidia: { symbol: "NVDA", name: "NVIDIA Corp.", inTerminal: true },
+  nvda: { symbol: "NVDA", name: "NVIDIA Corp.", inTerminal: true },
+  microsoft: { symbol: "MSFT", name: "Microsoft Corp.", inTerminal: true },
+  msft: { symbol: "MSFT", name: "Microsoft Corp.", inTerminal: true },
+  jpmorgan: { symbol: "JPM", name: "JPMorgan Chase", inTerminal: true },
+  jpm: { symbol: "JPM", name: "JPMorgan Chase", inTerminal: true },
+  gold: { symbol: "GLD", name: "SPDR Gold Shares", inTerminal: true },
+  gld: { symbol: "GLD", name: "SPDR Gold Shares", inTerminal: true },
+  treasury: { symbol: "TLT", name: "20+ Yr Treasury Bond ETF", inTerminal: true },
+  tlt: { symbol: "TLT", name: "20+ Yr Treasury Bond ETF", inTerminal: true },
+  bitcoin: { symbol: "BTC-USD", name: "Bitcoin", inTerminal: true },
+  btc: { symbol: "BTC-USD", name: "Bitcoin", inTerminal: true },
+  ethereum: { symbol: "ETH-USD", name: "Ethereum", inTerminal: true },
+  eth: { symbol: "ETH-USD", name: "Ethereum", inTerminal: true },
+  solana: { symbol: "SOL-USD", name: "Solana", inTerminal: true },
+  sol: { symbol: "SOL-USD", name: "Solana", inTerminal: true },
+  tesla: { symbol: "TSLA", name: "Tesla Inc.", inTerminal: false },
+  tsla: { symbol: "TSLA", name: "Tesla Inc.", inTerminal: false },
+  spy: { symbol: "SPY", name: "S&P 500 ETF", inTerminal: false },
+  "s&p": { symbol: "SPY", name: "S&P 500 ETF", inTerminal: false },
+};
+
+interface LiveQuote {
+  symbol: string;
+  name: string;
+  price: number;
+  changePct: number;
+  inTerminal: boolean;
+}
+
+function detectAsset(message: string) {
+  const q = message.toLowerCase();
+  for (const [key, info] of Object.entries(TICKER_ALIASES)) {
+    if (new RegExp(`\\b${key.replace("&", "\\&")}\\b`, "i").test(q)) {
+      return info;
+    }
+  }
+  return null;
+}
+
+async function fetchLiveQuote(asset: { symbol: string; name: string; inTerminal: boolean }): Promise<LiveQuote | null> {
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 2500);
+    const res = await fetch(
+      `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(asset.symbol)}?interval=1d&range=5d`,
+      { signal: controller.signal, cache: "no-store" }
+    );
+    clearTimeout(timer);
+    if (!res.ok) return null;
+    const data = await res.json();
+    const meta = data?.chart?.result?.[0]?.meta;
+    const price = Number(meta?.regularMarketPrice);
+    const prevClose = Number(meta?.chartPreviousClose ?? meta?.previousClose ?? price);
+    if (!Number.isFinite(price) || price <= 0) return null;
+    const changePct = prevClose > 0 ? ((price - prevClose) / prevClose) * 100 : 0;
+    return {
+      symbol: asset.symbol,
+      name: asset.name,
+      price,
+      changePct,
+      inTerminal: asset.inTerminal,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function inferActionForQuery(message: string): { actionLabel: string; actionRoute: string } {
+  const q = message.toLowerCase();
+  if (q.includes("copula") || q.includes("ν") || q.includes("tail") || q.includes("monte carlo")) {
+    return { actionLabel: "Open Copula Risk Lab →", actionRoute: "/dashboard/risk-analysis" };
+  }
+  if (q.includes("backtest") || q.includes("covid") || q.includes("2022") || q.includes("crisis")) {
+    return { actionLabel: "Open Crisis Backtests →", actionRoute: "/dashboard/backtests" };
+  }
+  if (q.includes("setting") || q.includes("lock") || q.includes("governance")) {
+    return { actionLabel: "Open Settings →", actionRoute: "/dashboard/settings" };
+  }
+  if (q.includes("brief") || q.includes("report") || q.includes("summary")) {
+    return { actionLabel: "Open AI Brief →", actionRoute: "/dashboard/ai-brief" };
+  }
+  if (
+    q.includes("buy") ||
+    q.includes("sell") ||
+    q.includes("invest") ||
+    q.includes("profit") ||
+    q.includes("trade") ||
+    q.includes("tctf") ||
+    q.includes("contagion") ||
+    detectAsset(q) !== null
+  ) {
+    return { actionLabel: "Open Paper Trading Desk →", actionRoute: "/dashboard/portfolio" };
+  }
+  return { actionLabel: "Open Overview Dashboard →", actionRoute: "/dashboard" };
+}
+
+async function queryDecentralizedAI(
   message: string,
-  currentPath: string
+  currentPath: string,
+  quote: LiveQuote | null
+): Promise<string | null> {
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 5000);
+
+    const quoteContext = quote
+      ? `LIVE MARKET DATA RIGHT NOW: ${quote.name} (${quote.symbol}) is trading at $${quote.price.toFixed(2)} (${quote.changePct >= 0 ? "+" : ""}${quote.changePct.toFixed(2)}% today). ${quote.inTerminal ? "It is directly tradable in the Paper Trading Terminal." : "Note: it is not in the default 6-stock/4-crypto terminal list, so suggest using SPY/QQQ-proxy or AAPL/NVDA/MSFT."}`
+      : "No specific ticker quote was fetched.";
+
+    const systemPrompt = `You are the ZeroHour AI Guide, an expert quantitative finance & platform assistant embedded inside RiskLens // ZeroHour (https://zerohour-risk-engine.vercel.app).
+The user is currently on route: ${currentPath}.
+${quoteContext}
+
+PLATFORM ARCHITECTURE (use exact routes & features):
+- /dashboard: Overview with Portfolio Health Banner, 95% VaR & CVaR KPIs, Performance Area Chart, Asset Allocation Donut, Risk Level Gauge.
+- /dashboard/portfolio: Live Paper Trading Terminal ($1,250,000 simulated equity: $1M positions + $250k cash) with live Yahoo Finance & Binance feeds. Tradable tickers: AAPL, NVDA, MSFT, JPM, GLD, TLT, BTC, ETH, SOL, BNB. Supports Market & Limit BUY/SELL orders, 1-click +$10k/-$10k quick buttons, and León et al. (2011) TCTF Network Contagion (-15% Shock).
+- /dashboard/risk-analysis: Student-t Copula Monte Carlo Lab (10,000 paths, adjustable degrees of freedom ν, 50-bin Risk Distribution Histogram, stress sliders).
+- /dashboard/backtests: Historical Crisis Backtests (March 2020 COVID-19 shock & 2022 Rate-Hike drawdown).
+- /dashboard/analytics: Deep risk attribution & correlation analytics.
+- /dashboard/ai-brief: Automated executive risk brief.
+- /dashboard/settings: Risk limits, AI Governance Lock, telemetry settings.
+
+INSTRUCTIONS:
+- Solve the user's actual problem directly, concisely (under 140 words), and practically.
+- If they ask how to invest for profit (e.g. in Apple/AAPL), give a concrete risk-managed playbook: (1) live price context, (2) position sizing (1-2% risk / $10k-$25k starter slice out of $1.25M), (3) Limit order entry vs Market, (4) profit target & stop-loss discipline, and (5) stress-testing in Student-t Copula & TCTF Contagion before scaling up.
+- Always remind them that RiskLens // ZeroHour uses simulated paper trading (not licensed financial advice).`;
+
+    const res = await fetch("https://text.pollinations.ai/", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: message },
+        ],
+        model: "openai",
+        seed: 42,
+      }),
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+
+    if (!res.ok) return null;
+    const text = (await res.text()).trim();
+    if (!text || text.length < 20 || text.startsWith("<")) return null;
+    return text;
+  } catch {
+    return null;
+  }
+}
+
+function buildExpertFallbackResponse(
+  message: string,
+  quote: LiveQuote | null
 ): GuideReply {
   const q = message.toLowerCase().trim();
+  const action = inferActionForQuery(message);
 
-  // 1. Paper Trading / Buy / Sell / Order issues
+  // 1. Investing / Profit Gain / Specific Ticker Strategy
+  if (
+    quote ||
+    q.includes("invest") ||
+    q.includes("profit") ||
+    q.includes("gain") ||
+    q.includes("strategy") ||
+    q.includes("how to make money")
+  ) {
+    const assetLabel = quote
+      ? `**${quote.name} (${quote.symbol})** — currently **$${quote.price.toFixed(2)}** (${quote.changePct >= 0 ? "+" : ""}${quote.changePct.toFixed(2)}% today)`
+      : "**your target asset (e.g. AAPL, NVDA, MSFT, BTC)**";
+
+    return {
+      title: quote ? `${quote.symbol} Profit & Risk-Managed Playbook` : "Risk-Managed Profit Playbook",
+      reply:
+        `Here is how to trade ${assetLabel} smartly inside **RiskLens // ZeroHour** (simulated paper trading, not financial advice):\n\n` +
+        `1. **Start Small (Position Sizing):** Out of your **$1,250,000** paper equity, start with a **+$10k to +$25k** slice in \`/dashboard/portfolio\` so a single pullback can't hurt your portfolio.\n` +
+        `2. **Better Entry Price:** Instead of chasing a Market BUY, place a **Limit BUY** 0.5%–1.5% below spot${quote ? ` (around **$${(quote.price * 0.99).toFixed(2)}**)` : ""} to capture dips.\n` +
+        `3. **Lock In Gains & Cap Loss:** Aim for a **+5% to +10% profit target** and cut losses at **-3% to -5%**.\n` +
+        `4. **Stress-Test Before Scaling:** Run **Student-t Copula (ν = 4)** in \`/dashboard/risk-analysis\` and the **-15% TCTF Contagion** test to verify your **95% VaR** stays within your limit.`,
+      actionLabel: action.actionLabel,
+      actionRoute: action.actionRoute,
+      actions: [
+        { label: action.actionLabel, href: action.actionRoute },
+        { label: "Run Student-t Copula Stress Test →", href: "/dashboard/risk-analysis" },
+      ],
+    };
+  }
+
+  // 2. Paper Trading / Buy / Sell / Order issues
   if (
     q.includes("buy") ||
     q.includes("sell") ||
@@ -31,225 +219,118 @@ function buildExpertGuideResponse(
     q.includes("position")
   ) {
     return {
-      title: "How to Paper Trade (BUY / SELL) & Troubleshoot Orders",
+      title: "Paper Trading & Order Troubleshooting",
       reply:
-        "You have a **$1,250,000 Paper Trading Account** ($1,000,000 in live positions + $250,000 Cash Buying Power):\n\n" +
-        "1. **Go to the Portfolio & Paper Trading tab** (`/dashboard/portfolio`).\n" +
-        "2. **Pick an Asset:** Click `NVDA`, `AAPL`, `MSFT`, `JPM`, `GLD`, `TLT` (or switch to `Crypto` for `BTC`, `ETH`, `SOL`, `BNB`).\n" +
-        "3. **Place a Trade:** Choose **BUY** (uses your Cash Buying Power) or **SELL** (sells shares you currently own), pick **Market** or **Limit**, and enter a USD amount (or click `+Buy $10k` / `-Sell $10k` directly in the table).\n" +
-        "4. **Order Rejected?**\n" +
-        "   • *Insufficient Cash:* You tried to BUY more than your available Cash Buying Power. Sell a position first or click **Reset $1.25M Account**.\n" +
+        "You have a **$1,250,000 Paper Trading Account** ($1,000,000 positions + $250,000 Cash Buying Power):\n\n" +
+        "1. **Go to `/dashboard/portfolio`** and pick `AAPL`, `NVDA`, `MSFT`, `JPM`, `GLD`, `TLT`, or Crypto (`BTC`, `ETH`, `SOL`, `BNB`).\n" +
+        "2. **Order Rejected?**\n" +
+        "   • *Insufficient Cash:* Your BUY exceeds available Cash Buying Power. Sell a position or reset.\n" +
         "   • *Insufficient Shares:* You tried to SELL more shares than you hold.\n" +
-        "   • *Limit Price Not Met:* A Limit BUY must be ≥ Ask, and a Limit SELL must be ≤ Bid.",
-      actions: [
-        { label: "Open Paper Trading Desk →", href: "/dashboard/portfolio" },
-        {
-          label: "How do trades affect VaR?",
-          prompt: "How do my paper trades affect Student-t Copula VaR and CVaR?",
-        },
-      ],
+        "   • *Limit Price Not Met:* Limit BUY must be ≥ Ask; Limit SELL must be ≤ Bid.",
+      actionLabel: "Open Paper Trading Desk →",
+      actionRoute: "/dashboard/portfolio",
+      actions: [{ label: "Open Paper Trading Desk →", href: "/dashboard/portfolio" }],
     };
   }
 
-  // 2. How trades affect risk / weights
-  if (q.includes("affect") && (q.includes("var") || q.includes("risk"))) {
+  // 3. VaR / CVaR
+  if (q.includes("var") || q.includes("cvar") || q.includes("shortfall")) {
     return {
-      title: "Real-Time Portfolio Weight & Risk Recalculation",
+      title: "95% VaR vs. CVaR (Expected Shortfall)",
       reply:
-        "Every time you execute a **BUY** or **SELL** paper trade:\n\n" +
-        "• Your position market values ($sh_i \\times P_i$) are updated immediately.\n" +
-        "• Your portfolio weights ($w_i = V_i / \\sum V_j$) are automatically recalculated.\n" +
-        "• The **Student-t Copula Monte Carlo engine** immediately re-runs 10,000 paths with your new weights, updating your **95% VaR**, **95% CVaR**, and **TCTF Contagion** exposure in real time!",
-      actions: [
-        { label: "Try a Paper Trade Now →", href: "/dashboard/portfolio" },
-        { label: "Inspect Risk Histogram →", href: "/dashboard/risk-analysis" },
-      ],
+        "• **95% VaR:** Maximum expected 1-day loss on 95% of normal trading days.\n" +
+        "• **95% CVaR (Expected Shortfall):** The **average loss** when a worst-5% crash actually happens.\n" +
+        "• **Use it:** Watch CVaR on `/dashboard` after every paper trade to ensure tail risk stays controlled.",
+      actionLabel: "View Overview KPIs →",
+      actionRoute: "/dashboard",
+      actions: [{ label: "View Overview KPIs →", href: "/dashboard" }],
     };
   }
 
-  // 3. VaR vs CVaR / Expected Shortfall
-  if (
-    q.includes("var") ||
-    q.includes("cvar") ||
-    q.includes("shortfall") ||
-    q.includes("value at risk")
-  ) {
+  // 4. Student-t Copula
+  if (q.includes("copula") || q.includes("ν") || q.includes("student") || q.includes("tail")) {
     return {
-      title: "Plain-English Guide: 95% VaR vs. 95% CVaR (Expected Shortfall)",
+      title: "Student-t Copula (ν) Tail-Risk Lab",
       reply:
-        "Here is the easiest way to understand **VaR** vs. **CVaR** on your $1,250,000 portfolio:\n\n" +
-        "• **95% Value at Risk (VaR):** *\"On 95% of market days (19 out of 20), my loss will NOT exceed this number.\"* It is the threshold of the worst 5% tail.\n" +
-        "• **95% Expected Shortfall (CVaR):** *\"When a bad crash DOES happen (the worst 5% of days), what is my AVERAGE loss?\"*\n" +
-        "• **Why CVaR is better:** Standard VaR only tells you where the cliff starts; **95% & 99% CVaR** tell you how deep the fall is during a real crisis.",
-      actions: [
-        { label: "View Overview KPIs →", href: "/dashboard" },
-        { label: "Open Copula Risk Lab →", href: "/dashboard/risk-analysis" },
-        {
-          label: "What is Student-t Copula?",
-          prompt: "Explain Student-t Copula and degrees of freedom in simple terms",
-        },
-      ],
+        "The **Student-t Copula** models joint crash dependence—assets falling together during panics. Lowering **ν (degrees of freedom)** fattens the tails and raises simultaneous crash probability.",
+      actionLabel: "Open Copula Risk Lab →",
+      actionRoute: "/dashboard/risk-analysis",
+      actions: [{ label: "Open Copula Risk Lab →", href: "/dashboard/risk-analysis" }],
     };
   }
 
-  // 4. Student-t Copula / Degrees of Freedom / Fat Tails
-  if (
-    q.includes("copula") ||
-    q.includes("student") ||
-    q.includes("degree") ||
-    q.includes("freedom") ||
-    q.includes("fat tail") ||
-    q.includes("histogram") ||
-    q.includes("nu") ||
-    q.includes("ν")
-  ) {
+  // 5. TCTF Contagion
+  if (q.includes("tctf") || q.includes("contagion") || q.includes("-15%")) {
     return {
-      title: "Student-t Copula & Degrees of Freedom (ν) Explained",
+      title: "León et al. (2011) TCTF Network Contagion",
       reply:
-        "Traditional risk tools use a **Gaussian (Normal) Bell Curve**, which assumes market crashes are virtually impossible and assets don't crash together.\n\n" +
-        "• **Student-t Copula:** Models **joint tail dependence ($\\lambda_L > 0$)**—the reality that during a panic, stocks, tech, and even bonds drop at the exact same time.\n" +
-        "• **Degrees of Freedom ($\\nu$):** Controls how \"fat\" the crash tails are:\n" +
-        "  – **$\\nu = 3\\text{ to }4$ (Crisis Mode):** Heavy fat tails & high joint crash probability.\n" +
-        "  – **$\\nu = 15\\text{ to }30$ (Calm Mode):** Approaches a standard normal bell curve.\n" +
-        "• You can drag the **$\\nu$ slider** inside **Risk Analysis** (`/dashboard/risk-analysis`) and watch the rose tail-loss bars on the histogram shift in <25ms!",
-      actions: [
-        { label: "Open Student-t Copula Lab →", href: "/dashboard/risk-analysis" },
-        {
-          label: "Why did Gaussian VaR fail in 2020?",
-          prompt: "How do the COVID-19 2020 and 2022 Rate Hike backtests work?",
-        },
-      ],
+        "In `/dashboard/portfolio`, trigger the **-15% Shock** in the TCTF Network Contagion panel to see how distress in one holding propagates across correlated assets.",
+      actionLabel: "Test TCTF Contagion →",
+      actionRoute: "/dashboard/portfolio",
+      actions: [{ label: "Test TCTF Contagion →", href: "/dashboard/portfolio" }],
     };
   }
 
-  // 5. TCTF / Contagion / Network / León et al. (2011)
-  if (
-    q.includes("tctf") ||
-    q.includes("contagion") ||
-    q.includes("network") ||
-    q.includes("centrality") ||
-    q.includes("leon") ||
-    q.includes("león") ||
-    q.includes("hub") ||
-    q.includes("shock")
-  ) {
+  // 6. Backtests
+  if (q.includes("backtest") || q.includes("covid") || q.includes("2022")) {
     return {
-      title: "Too-Connected-To-Fail (TCTF) Network Contagion (León et al., 2011)",
+      title: "COVID-19 & 2022 Crisis Backtests",
       reply:
-        "Based on **León et al. (2011)**, systemic risk depends not just on how big an asset is, but how **connected** it is to every other asset:\n\n" +
-        "• **TCTF Score (0–100):** Computed via **Eigenvector Centrality** on the cross-asset tail correlation matrix. Highly connected hubs (like `MSFT` or `NVDA`) have the highest TCTF scores.\n" +
-        "• **Interactive -15% Shock Simulator:** On the **Portfolio** page (`/dashboard/portfolio`), click any node in the network graph (or click **Inject -15% Node Shock**) to simulate a sudden -15% crash on that asset and see the exact contagion spillover across your entire portfolio!",
-      actions: [
-        { label: "Test TCTF Node Shock →", href: "/dashboard/portfolio" },
-        {
-          label: "Explain COVID & 2022 Backtests",
-          prompt: "How do the COVID-19 2020 and 2022 Rate Hike backtests work?",
-        },
-      ],
+        "Open `/dashboard/backtests` to replay your current portfolio against the **March 2020 COVID-19** shock and the **2022 Rate-Hike** drawdown.",
+      actionLabel: "Open Crisis Backtests →",
+      actionRoute: "/dashboard/backtests",
+      actions: [{ label: "Open Crisis Backtests →", href: "/dashboard/backtests" }],
     };
   }
 
-  // 6. Backtests / COVID-19 / 2022 Rate Hike / Analytics
-  if (
-    q.includes("backtest") ||
-    q.includes("covid") ||
-    q.includes("2020") ||
-    q.includes("2022") ||
-    q.includes("rate hike") ||
-    q.includes("breach") ||
-    q.includes("benchmark")
-  ) {
-    return {
-      title: "Historical Crisis Backtests: COVID-19 (2020) & Rate Hike (2022)",
-      reply:
-        "Our **Backtests** (`/dashboard/backtests`) and **Analytics** (`/dashboard/analytics`) pages replay 60 trading days of real historical market crises:\n\n" +
-        "1. **2020 COVID-19 Liquidity Crash:** Cross-asset correlations spiked above 0.85. Static **Gaussian 95% VaR suffered 11 breaches** (81.7% coverage), whereas our **Student-t Copula 95% VaR had only 3 breaches** (exact 95.0% coverage!).\n" +
-        "2. **2022 Fed Rate-Hike Bear Market (+425 bps):** Both Equities (`NVDA`, `MSFT`) and Treasury Bonds (`TLT`) fell together, breaking traditional 60/40 diversification. Student-t Copula accurately captured the joint drawdown.",
-      actions: [
-        { label: "Open Crisis Backtests →", href: "/dashboard/backtests" },
-        { label: "Open Analytics Comparison →", href: "/dashboard/analytics" },
-      ],
-    };
-  }
-
-  // 7. Live Market Data / Crypto / Yahoo Finance / Binance
-  if (
-    q.includes("live") ||
-    q.includes("crypto") ||
-    q.includes("equit") ||
-    q.includes("yahoo") ||
-    q.includes("binance") ||
-    q.includes("feed") ||
-    q.includes("price")
-  ) {
-    return {
-      title: "Open-Source Live Market Feeds (Yahoo Finance & Binance)",
-      reply:
-        "RiskLens streams real-time market data in two modes:\n\n" +
-        "• **Equities Mode (`NVDA`, `AAPL`, `MSFT`, `JPM`, `GLD`, `TLT`):** Powered by the open-source **Yahoo Finance v8 Quote/Chart API** with sub-second bid/ask micro-ticks.\n" +
-        "• **Crypto Mode (`BTC`, `ETH`, `SOL`, `BNB`):** Powered 24/7 by the **Binance Spot WebSocket & REST API**.\n" +
-        "• You can switch between **Equities** and **Crypto** at the top-right of `/dashboard` or `/dashboard/portfolio`, or click **Sync Live Market** anytime!",
-      actions: [
-        { label: "Switch Feeds on Overview →", href: "/dashboard" },
-        { label: "Trade Live Quotes →", href: "/dashboard/portfolio" },
-      ],
-    };
-  }
-
-  // 8. AI Governance / Ethics / Guardrails / Settings
-  if (
-    q.includes("ai") ||
-    q.includes("guardrail") ||
-    q.includes("ethic") ||
-    q.includes("governance") ||
-    q.includes("lock") ||
-    q.includes("hallucinat") ||
-    q.includes("setting")
-  ) {
-    return {
-      title: "AI Governance Lock & Anti-Hallucination Guardrails",
-      reply:
-        "To comply with strict quantitative finance ethics:\n\n" +
-        "1. **Read-Only Advisory Lock (`VERIFIED_READ_ONLY`):** The AI Risk Co-Pilot can NEVER autonomously execute trades or rebalance your portfolio—only YOU can place trades in the Paper Trading terminal.\n" +
-        "2. **Anti-Hallucination Math Verification:** Every number generated by the AI is verified against the live `RiskMetrics` within a strict 5% tolerance.\n" +
-        "3. **Test It Yourself:** Go to **AI Risk Brief** (`/dashboard/ai-brief`) and click **Test Ethics Guardrail** to watch the system intercept and block an unauthorized trade command!",
-      actions: [
-        { label: "Open AI Risk Brief →", href: "/dashboard/ai-brief" },
-        { label: "Open Settings →", href: "/dashboard/settings" },
-      ],
-    };
-  }
-
-  // 9. Default / General Help / Tour
   return {
-    title: "Welcome to RiskLens // ZeroHour Guide!",
+    title: "ZeroHour AI Guide",
     reply:
-      `You are currently viewing \`${currentPath || "/"}\`. I can solve any problem or guide you anywhere on the platform:\n\n` +
-      "• **Overview (`/dashboard`):** Live Portfolio Health, Sharpe Ratio, 95% VaR/CVaR, Performance Chart, and Risk Gauge.\n" +
-      "• **Portfolio & Paper Trading (`/dashboard/portfolio`):** Trade with **$1,250,000** paper equity (`BUY` / `SELL` Market & Limit orders) + test **León et al. (2011) TCTF -15% Contagion Shocks**.\n" +
-      "• **Risk Analysis (`/dashboard/risk-analysis`):** Interactive **Student-t Copula ($\\nu$)** tail-risk lab & 50-bin PnL histogram.\n" +
-      "• **Backtests (`/dashboard/backtests`):** Replay the **2020 COVID-19 Crash** and **2022 Rate-Hike Bear Market**.\n\n" +
-      "Click any button below or type your question!",
-    actions: [
-      { label: "Go to Dashboard Overview →", href: "/dashboard" },
-      { label: "Open Paper Trading (Buy/Sell) →", href: "/dashboard/portfolio" },
-      { label: "Open Student-t Copula Lab →", href: "/dashboard/risk-analysis" },
-      { label: "Run COVID & 2022 Backtests →", href: "/dashboard/backtests" },
-    ],
+      "I have full access to your **RiskLens // ZeroHour** deployment and live market quotes. Ask me about any stock/crypto (e.g. *\"If I want to invest in Apple for profit, what should I do?\"*), paper trading errors, **VaR/CVaR**, **Student-t Copula**, or **Crisis Backtests**!",
+    actionLabel: action.actionLabel,
+    actionRoute: action.actionRoute,
+    actions: [{ label: action.actionLabel, href: action.actionRoute }],
   };
 }
 
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const message = String(body?.message || "");
-    const currentPath = String(body?.currentPath || "/");
+    const message = String(body?.message ?? "").trim();
+    const currentPath = String(body?.currentPath ?? "/dashboard");
 
-    const guideReply = buildExpertGuideResponse(message, currentPath);
-    return NextResponse.json(guideReply);
+    if (!message) {
+      return NextResponse.json({ error: "Message is required" }, { status: 400 });
+    }
+
+    const asset = detectAsset(message);
+    const quote = asset ? await fetchLiveQuote(asset) : null;
+    const aiReply = await queryDecentralizedAI(message, currentPath, quote);
+
+    if (aiReply) {
+      const action = inferActionForQuery(message);
+      return NextResponse.json({
+        reply: aiReply,
+        actionLabel: action.actionLabel,
+        actionRoute: action.actionRoute,
+        actions: [{ label: action.actionLabel, href: action.actionRoute }],
+        liveQuote: quote,
+      });
+    }
+
+    const fallback = buildExpertFallbackResponse(message, quote);
+    return NextResponse.json({ ...fallback, liveQuote: quote });
   } catch {
     return NextResponse.json(
-      buildExpertGuideResponse("help", "/dashboard")
+      {
+        title: "ZeroHour AI Guide",
+        reply:
+          "Ask me about **investing in a specific stock (like Apple/NVDA/BTC)**, **Paper Trading (`BUY`/`SELL`)**, **Student-t Copula (`ν`)**, **TCTF Contagion**, or **Crisis Backtests**.",
+        actionLabel: "Open Overview →",
+        actionRoute: "/dashboard",
+        actions: [{ label: "Open Overview →", href: "/dashboard" }],
+      },
+      { status: 200 }
     );
   }
 }

@@ -67,12 +67,12 @@ const TOUR_STEPS = [
 ];
 
 const QUICK_QUESTIONS = [
+  'If I want to invest in Apple for profit, what should I do?',
   'How do I Buy/Sell in Paper Trading?',
   'Why was my order rejected?',
   'Explain 95% VaR vs CVaR',
   'What is Student-t Copula (ν)?',
   'How to test -15% TCTF Contagion?',
-  'COVID-19 & 2022 Backtests',
 ];
 
 function localFallbackReply(question: string): Omit<ChatMessage, 'id' | 'role'> {
